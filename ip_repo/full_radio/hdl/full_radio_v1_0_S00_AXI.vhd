@@ -118,16 +118,134 @@ architecture arch_imp of full_radio_v1_0_S00_AXI is
 	signal reg_data_out	:std_logic_vector(C_S_AXI_DATA_WIDTH-1 downto 0);
 	signal byte_index	: integer;
 	signal aw_en	: std_logic;
-
-COMPONENT dds_compiler_0
-  PORT (
-    aclk : IN STD_LOGIC;
-    aresetn : IN STD_LOGIC;
-    s_axis_phase_tvalid : IN STD_LOGIC;
-    s_axis_phase_tdata : IN STD_LOGIC_VECTOR(31 DOWNTO 0);
-    m_axis_data_tvalid : OUT STD_LOGIC;
-    m_axis_data_tdata : OUT STD_LOGIC_VECTOR(31 DOWNTO 0)
-  );
+	
+	-- Free running counter.
+	signal free_counter : unsigned(31 downto 0);
+	
+	--Storing state of filter select.
+    signal filter_select : std_logic;
+	
+	--Input to dac if, which will be constructed from dds output.
+    signal dac_if_input : std_logic_vector(31 downto 0);
+    
+    -- Peripheral output valid signal.
+    signal valid_sig : std_logic;
+    
+    -- DDS reset.
+    signal dds_reset_n : std_logic;
+	
+	--Internal signals to interface with fake adc dds.
+    signal m_axis_data_tvalid_fake : std_logic;
+    signal m_axis_data_tdata_fake : std_logic_vector(15 downto 0);
+    signal ex_m_axis_data_tdata_fake : std_logic_vector(31 downto 0);
+    
+    --Internal signals to interface with tuner dds.
+    signal m_axis_data_tvalid_tune : std_logic;
+    signal m_axis_data_tdata_tune : std_logic_vector(31 downto 0);
+    
+    -- Signal to interface with multiplier.
+    signal mult_a_valid_in : STD_LOGIC;
+    signal mult_a_data_in : STD_LOGIC_VECTOR(31 DOWNTO 0);
+    signal mult_b_valid_in : STD_LOGIC;
+    signal mult_b_data_in : STD_LOGIC_VECTOR(31 DOWNTO 0);
+    signal mult_valid_out : STD_LOGIC;
+    signal mult_data_out : STD_LOGIC_VECTOR(79 DOWNTO 0);
+    signal mult_out_imag : STD_LOGIC_VECTOR(32 DOWNTO 0);
+    signal div_mult_out_imag : STD_LOGIC_VECTOR(15 DOWNTO 0);
+    signal mult_out_real : STD_LOGIC_VECTOR(32 DOWNTO 0);
+    signal div_mult_out_real : STD_LOGIC_VECTOR(15 DOWNTO 0);
+    
+    --Signals that interface with imag FIR filter.
+    signal imag_fir0_tvalid_in : std_logic;
+    signal imag_fir0_tdata_in : std_logic_vector(15 downto 0);
+    signal imag_fir0_tready_out : std_logic;
+    signal imag_fir0_tvalid_out : std_logic;
+    signal imag_fir0_tdata_out : std_logic_vector(31 downto 0);
+    
+    signal imag_fir0_tdata_out_shift : std_logic_vector(15 downto 0);
+    
+    signal imag_fir1_tvalid_in : std_logic;
+    signal imag_fir1_tdata_in : std_logic_vector(15 downto 0);
+    signal imag_fir1_tready_out : std_logic;
+    signal imag_fir1_tvalid_out : std_logic;
+    signal imag_fir1_tdata_out : std_logic_vector(31 downto 0);
+    
+    signal imag_fir1_tdata_out_shift : std_logic_vector(15 downto 0);
+    
+    --Signals that interface with real FIR filter.
+    signal real_fir0_tvalid_in : std_logic;
+    signal real_fir0_tdata_in : std_logic_vector(15 downto 0);
+    signal real_fir0_tready_out : std_logic;
+    signal real_fir0_tvalid_out : std_logic;
+    signal real_fir0_tdata_out : std_logic_vector(31 downto 0);
+    
+    signal real_fir0_tdata_out_shift : std_logic_vector(15 downto 0);
+    
+    signal real_fir1_tvalid_in : std_logic;
+    signal real_fir1_tdata_in : std_logic_vector(15 downto 0);
+    signal real_fir1_tready_out : std_logic;
+    signal real_fir1_tvalid_out : std_logic;
+    signal real_fir1_tdata_out : std_logic_vector(31 downto 0);
+    
+    signal real_fir1_tdata_out_shift : std_logic_vector(15 downto 0);
+    
+    
+    COMPONENT dds_compiler_0
+    PORT (
+        aclk : IN STD_LOGIC;
+        aresetn : IN STD_LOGIC;
+        s_axis_phase_tvalid : IN STD_LOGIC;
+        s_axis_phase_tdata : IN STD_LOGIC_VECTOR(31 DOWNTO 0);
+        m_axis_data_tvalid : OUT STD_LOGIC;
+        m_axis_data_tdata : OUT STD_LOGIC_VECTOR(15 DOWNTO 0)
+    );
+    END COMPONENT;
+    
+    -- define the tuner dds component
+    COMPONENT dds_compiler_1
+        PORT (
+            aclk : IN STD_LOGIC;
+            aresetn : IN STD_LOGIC;
+            s_axis_phase_tvalid : IN STD_LOGIC;
+            s_axis_phase_tdata : IN STD_LOGIC_VECTOR(31 DOWNTO 0);
+            m_axis_data_tvalid : OUT STD_LOGIC;
+            m_axis_data_tdata : OUT STD_LOGIC_VECTOR(31 DOWNTO 0) 
+    );
+    END COMPONENT;
+    
+    -- complex multiplier to multiply fake ADC with tuner
+    COMPONENT cmpy_0
+    PORT (
+        aclk : IN STD_LOGIC;
+        s_axis_a_tvalid : IN STD_LOGIC;
+        s_axis_a_tdata : IN STD_LOGIC_VECTOR(31 DOWNTO 0);
+        s_axis_b_tvalid : IN STD_LOGIC;
+        s_axis_b_tdata : IN STD_LOGIC_VECTOR(31 DOWNTO 0);
+        m_axis_dout_tvalid : OUT STD_LOGIC;
+        m_axis_dout_tdata : OUT STD_LOGIC_VECTOR(79 DOWNTO 0) 
+    );
+    END COMPONENT;
+    
+    COMPONENT fir_compiler_0
+      PORT (
+        aclk : IN STD_LOGIC;
+        s_axis_data_tvalid : IN STD_LOGIC;
+        s_axis_data_tready : OUT STD_LOGIC;
+        s_axis_data_tdata : IN STD_LOGIC_VECTOR(15 DOWNTO 0);
+        m_axis_data_tvalid : OUT STD_LOGIC;
+        m_axis_data_tdata : OUT STD_LOGIC_VECTOR(31 DOWNTO 0) 
+      );
+    END COMPONENT;
+    
+    COMPONENT fir_compiler_1
+      PORT (
+        aclk : IN STD_LOGIC;
+        s_axis_data_tvalid : IN STD_LOGIC;
+        s_axis_data_tready : OUT STD_LOGIC;
+        s_axis_data_tdata : IN STD_LOGIC_VECTOR(15 DOWNTO 0);
+        m_axis_data_tvalid : OUT STD_LOGIC;
+        m_axis_data_tdata : OUT STD_LOGIC_VECTOR(31 DOWNTO 0) 
+      );
     END COMPONENT;
 
 begin
@@ -367,11 +485,11 @@ begin
 	      when b"00" =>
 	        reg_data_out <= slv_reg0;
 	      when b"01" =>
-	        reg_data_out <= x"DEADBEEF";
+	        reg_data_out <= slv_reg1;
 	      when b"10" =>
 	        reg_data_out <= slv_reg2;
 	      when b"11" =>
-	        reg_data_out <= slv_reg3;
+	        reg_data_out <= std_logic_vector(free_counter);
 	      when others =>
 	        reg_data_out  <= (others => '0');
 	    end case;
@@ -395,20 +513,141 @@ begin
 	  end if;
 	end process;
 
-
 	-- Add user logic here
+	
+    process (S_AXI_ACLK, S_AXI_ARESETN)
+	begin
+	  if rising_edge(S_AXI_ACLK) then 
+	    if S_AXI_ARESETN = '0' then
+	      free_counter <= "00000000000000000000000000000000";
+	    else
+	      free_counter <= free_counter + 1;
+	    end if;
+	  end if;
+	end process;
+	
+	-- Peripheral output assignments.
+	m_axis_tdata <= dac_if_input;
+	m_axis_tvalid <= valid_sig;
+	
+	--construct the 32 bit word input to the dac interface
+    filter_select <= '1';
+    dac_if_input <= (imag_fir1_tdata_out_shift & real_fir1_tdata_out_shift) when (filter_select = '0') else
+                    (imag_fir1_tdata_out_shift & real_fir1_tdata_out_shift);
+    valid_sig <= imag_fir1_tvalid_out and real_fir1_tvalid_out;
+    
+    -- define dds reset signal.
+    dds_reset_n <= '1' when (slv_reg2(0) = '0') else
+                   '0';
 
-your_instance_name : dds_compiler_0
+  fake_adc : dds_compiler_0
   PORT MAP (
     aclk => s_axi_aclk,
-    aresetn => '1',
+    aresetn => dds_reset_n,
     s_axis_phase_tvalid => '1',
     s_axis_phase_tdata => slv_reg0,
-    m_axis_data_tvalid => m_axis_tvalid,
-    m_axis_data_tdata => m_axis_tdata
+    m_axis_data_tvalid => m_axis_data_tvalid_fake,
+    m_axis_data_tdata => m_axis_data_tdata_fake
   );
-
-
+  
+  -- Make the fake adc dds output into 32 bits.
+  ex_m_axis_data_tdata_fake <= "0000000000000000" & m_axis_data_tdata_fake(15 downto 0);
+  
+  tuner_adc : dds_compiler_1
+  PORT MAP (
+    aclk => s_axi_aclk,
+    aresetn => dds_reset_n,
+    s_axis_phase_tvalid => '1',
+    s_axis_phase_tdata => slv_reg1,
+    m_axis_data_tvalid => m_axis_data_tvalid_tune,
+    m_axis_data_tdata => m_axis_data_tdata_tune
+  );
+  
+    -- Define the inputs to the complex multiplier.
+    mult_a_valid_in <= m_axis_data_tvalid_fake;
+    mult_a_data_in <= ex_m_axis_data_tdata_fake;
+    mult_b_valid_in <= m_axis_data_tvalid_tune;
+    mult_b_data_in <= m_axis_data_tdata_tune;
+  
+  tune_mult : cmpy_0
+    PORT MAP (
+        aclk => s_axi_aclk,
+        s_axis_a_tvalid => mult_a_valid_in,
+        s_axis_a_tdata => mult_a_data_in,
+        s_axis_b_tvalid => mult_b_valid_in,
+        s_axis_b_tdata => mult_b_data_in,
+        m_axis_dout_tvalid => mult_valid_out,
+        m_axis_dout_tdata => mult_data_out
+    );
+    
+     -- Divide up the multiplier output into imaginary and real.
+     -- Scale down the multiplier outputs.
+     mult_out_imag <= mult_data_out(72 downto 40);
+     div_mult_out_imag <= mult_out_imag(32) & mult_out_imag(28 downto 14);
+     mult_out_real <= mult_data_out(32 downto 0);
+     div_mult_out_real <= mult_out_real(32) & mult_out_real(28 downto 14);
+     
+         
+    imag_fir0_tvalid_in <= mult_valid_out;
+    imag_fir0_tdata_in <= div_mult_out_imag;
+    
+    imag_fir0 : fir_compiler_0
+      PORT MAP (
+        aclk => s_axi_aclk,
+        s_axis_data_tvalid => imag_fir0_tvalid_in,
+        s_axis_data_tready => imag_fir0_tready_out,
+        s_axis_data_tdata => imag_fir0_tdata_in,
+        m_axis_data_tvalid => imag_fir0_tvalid_out,
+        m_axis_data_tdata => imag_fir0_tdata_out
+    );
+    
+    imag_fir0_tdata_out_shift <= imag_fir0_tdata_out(31) & imag_fir0_tdata_out(29 downto 15);
+    
+    imag_fir1_tvalid_in <= imag_fir0_tvalid_out;
+    imag_fir1_tdata_in <= imag_fir0_tdata_out_shift;
+    
+    imag_fir1 : fir_compiler_1
+      PORT MAP (
+        aclk => s_axi_aclk,
+        s_axis_data_tvalid => imag_fir1_tvalid_in,
+        s_axis_data_tready => imag_fir1_tready_out,
+        s_axis_data_tdata => imag_fir1_tdata_in,
+        m_axis_data_tvalid => imag_fir1_tvalid_out,
+        m_axis_data_tdata => imag_fir1_tdata_out
+    );
+    
+    imag_fir1_tdata_out_shift <= imag_fir1_tdata_out(31) & imag_fir1_tdata_out(29 downto 15);
+    
+    real_fir0_tvalid_in <= mult_valid_out;
+    real_fir0_tdata_in <= div_mult_out_real;
+    
+    real_fir0 : fir_compiler_0
+      PORT MAP (
+        aclk => s_axi_aclk,
+        s_axis_data_tvalid => real_fir0_tvalid_in,
+        s_axis_data_tready => real_fir0_tready_out,
+        s_axis_data_tdata => real_fir0_tdata_in,
+        m_axis_data_tvalid => real_fir0_tvalid_out,
+        m_axis_data_tdata => real_fir0_tdata_out
+    );
+    
+    real_fir0_tdata_out_shift <= real_fir0_tdata_out(31) & real_fir0_tdata_out(29 downto 15);
+    
+    real_fir1_tvalid_in <= real_fir0_tvalid_out;
+    real_fir1_tdata_in <= real_fir0_tdata_out_shift;
+    
+    real_fir1 : fir_compiler_1
+      PORT MAP (
+        aclk => s_axi_aclk,
+        s_axis_data_tvalid => real_fir1_tvalid_in,
+        s_axis_data_tready => real_fir1_tready_out,
+        s_axis_data_tdata => real_fir1_tdata_in,
+        m_axis_data_tvalid => real_fir1_tvalid_out,
+        m_axis_data_tdata => real_fir1_tdata_out
+    );
+    
+    real_fir1_tdata_out_shift <= real_fir1_tdata_out(31) & real_fir1_tdata_out(29 downto 15);
+    
 	-- User logic ends
 
 end arch_imp;
